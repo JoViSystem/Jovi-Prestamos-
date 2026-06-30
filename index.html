@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sistema Avanzado de Prestamos</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar" aria-label="Menu principal">
+    <div class="brand">
+      <div class="brand-mark">$</div>
+      <div>
+        <strong>Prestamos Pro</strong>
+        <span>Control financiero</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard">Inicio</button>
+      <button class="nav-item" data-view="loans">Prestamos</button>
+      <button class="nav-item" data-view="clients">Clientes</button>
+      <button class="nav-item" data-view="payments">Pagos</button>
+      <button class="nav-item" data-view="due">Vencimientos</button>
+      <button class="nav-item" data-view="settings">Respaldo</button>
+    </nav>
+  </aside>
+
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Panel de gestion</p>
+        <h1 id="pageTitle">Inicio</h1>
+      </div>
+      <div class="top-actions">
+        <button class="ghost-btn" id="seedBtn" type="button">Datos demo</button>
+        <button class="primary-btn" data-open-modal="loanModal" type="button">Nuevo prestamo</button>
+      </div>
+    </header>
+
+    <section class="view active" id="dashboard">
+      <div class="metrics-grid">
+        <article class="metric-card">
+          <span>Capital prestado</span>
+          <strong id="metricPrincipal">$0.00</strong>
+        </article>
+        <article class="metric-card">
+          <span>Balance pendiente</span>
+          <strong id="metricBalance">$0.00</strong>
+        </article>
+        <article class="metric-card">
+          <span>Interes proyectado</span>
+          <strong id="metricInterest">$0.00</strong>
+        </article>
+        <article class="metric-card danger">
+          <span>Cuotas vencidas</span>
+          <strong id="metricOverdue">0</strong>
+        </article>
+      </div>
+
+      <div class="content-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Prestamos recientes</h2>
+            <button class="link-btn" data-view-shortcut="loans" type="button">Ver todos</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Monto</th>
+                  <th>Balance</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="recentLoansTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Proximos cobros</h2>
+            <button class="link-btn" data-view-shortcut="due" type="button">Abrir agenda</button>
+          </div>
+          <div id="upcomingList" class="stack-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" id="loans">
+      <div class="toolbar">
+        <input id="loanSearch" type="search" placeholder="Buscar por cliente, codigo o estado">
+        <select id="loanStatusFilter">
+          <option value="all">Todos los estados</option>
+          <option value="active">Activos</option>
+          <option value="late">Atrasados</option>
+          <option value="closed">Saldados</option>
+        </select>
+        <button class="primary-btn" data-open-modal="loanModal" type="button">Nuevo prestamo</button>
+      </div>
+      <div id="loanCards" class="loan-grid"></div>
+    </section>
+
+    <section class="view" id="clients">
+      <div class="toolbar">
+        <input id="clientSearch" type="search" placeholder="Buscar cliente por nombre, cedula o telefono">
+        <button class="primary-btn" data-open-modal="clientModal" type="button">Nuevo cliente</button>
+      </div>
+      <div class="table-wrap panel-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Documento</th>
+              <th>Telefono</th>
+              <th>Prestamos</th>
+              <th>Accion</th>
+            </tr>
+          </thead>
+          <tbody id="clientsTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="view" id="payments">
+      <div class="toolbar">
+        <select id="paymentLoanSelect"></select>
+        <input id="paymentDate" type="date">
+        <input id="paymentAmount" type="number" min="0" step="0.01" placeholder="Monto pagado">
+        <button class="primary-btn" id="registerPaymentBtn" type="button">Registrar pago</button>
+      </div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Historial de pagos</h2>
+          <span id="paymentCount" class="muted"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Cliente</th>
+                <th>Prestamo</th>
+                <th>Monto</th>
+              </tr>
+            </thead>
+            <tbody id="paymentsTable"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="view" id="due">
+      <div class="toolbar">
+        <input id="dueDateFilter" type="date">
+        <select id="dueFilter">
+          <option value="all">Todas</option>
+          <option value="overdue">Vencidas</option>
+          <option value="today">Vencen hoy</option>
+          <option value="future">Proximas</option>
+        </select>
+      </div>
+      <div id="dueList" class="due-grid"></div>
+    </section>
+
+    <section class="view" id="settings">
+      <div class="settings-grid">
+        <section class="panel">
+          <h2>Respaldo de datos</h2>
+          <p class="muted">Exporta una copia JSON para guardarla en otro lugar o restaurarla despues.</p>
+          <div class="button-row">
+            <button class="primary-btn" id="exportBtn" type="button">Exportar respaldo</button>
+            <label class="file-btn">
+              Importar respaldo
+              <input id="importInput" type="file" accept="application/json">
+            </label>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Configuracion</h2>
+          <label class="field-label" for="currencyInput">Moneda</label>
+          <input id="currencyInput" type="text" maxlength="6" value="$">
+          <label class="field-label" for="companyInput">Nombre del negocio</label>
+          <input id="companyInput" type="text" value="Prestamos Pro">
+          <button class="primary-btn" id="saveSettingsBtn" type="button">Guardar configuracion</button>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal" id="clientModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="clientModalTitle">
+      <div class="modal-head">
+        <h2 id="clientModalTitle">Nuevo cliente</h2>
+        <button class="icon-btn" data-close-modal type="button" aria-label="Cerrar">x</button>
+      </div>
+      <form id="clientForm">
+        <label>Nombre completo<input id="clientName" required></label>
+        <div class="form-row">
+          <label>Documento<input id="clientDocument"></label>
+          <label>Telefono<input id="clientPhone"></label>
+        </div>
+        <label>Direccion<textarea id="clientAddress" rows="3"></textarea></label>
+        <button class="primary-btn full" type="submit">Guardar cliente</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal" id="loanModal" aria-hidden="true">
+    <div class="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="loanModalTitle">
+      <div class="modal-head">
+        <h2 id="loanModalTitle">Nuevo prestamo</h2>
+        <button class="icon-btn" data-close-modal type="button" aria-label="Cerrar">x</button>
+      </div>
+      <form id="loanForm">
+        <div class="form-row">
+          <label>Cliente<select id="loanClient" required></select></label>
+          <label>Codigo<input id="loanCode" readonly></label>
+        </div>
+        <div class="form-row">
+          <label>Monto<input id="loanPrincipal" type="number" min="1" step="0.01" required></label>
+          <label>Interes %<input id="loanRate" type="number" min="0" step="0.01" required></label>
+        </div>
+        <div class="form-row">
+          <label>Frecuencia
+            <select id="loanFrequency">
+              <option value="weekly">Semanal</option>
+              <option value="biweekly">Quincenal</option>
+              <option value="monthly">Mensual</option>
+            </select>
+          </label>
+          <label>Cuotas<input id="loanTerms" type="number" min="1" step="1" value="12" required></label>
+        </div>
+        <div class="form-row">
+          <label>Fecha inicio<input id="loanStartDate" type="date" required></label>
+          <label>Metodo interes
+            <select id="loanInterestType">
+              <option value="flat">Fijo sobre capital</option>
+              <option value="simple">Simple proporcional</option>
+            </select>
+          </label>
+        </div>
+        <label>Nota<textarea id="loanNote" rows="3"></textarea></label>
+        <button class="primary-btn full" type="submit">Crear prestamo</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
