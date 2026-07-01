@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel del dueño - Prestamos Pro</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { padding: 32px; max-width: 720px; margin: 0 auto; }
+    .owner-card { margin-bottom: 18px; }
+    table { min-width: 100%; }
+  </style>
+</head>
+<body>
+  <section class="login-screen" id="loginScreen" style="min-height:60vh;">
+    <div class="login-card">
+      <div class="brand login-brand"><div class="brand-mark">$</div><div><strong>Panel del dueño</strong><span>Solo para administracion de la plataforma</span></div></div>
+      <form id="loginForm">
+        <label>Correo<input id="loginEmail" type="email" required></label>
+        <label>Clave<input id="loginPass" type="password" required></label>
+        <button class="primary-btn full" type="submit">Entrar</button>
+      </form>
+    </div>
+  </section>
+
+  <main id="ownerApp" style="display:none;">
+    <header class="topbar">
+      <div><p class="eyebrow">Plataforma</p><h1>Empresas clientes</h1></div>
+      <button class="ghost-btn" id="logoutBtn" type="button">Salir</button>
+    </header>
+
+    <section class="panel owner-card">
+      <h2>Nueva empresa</h2>
+      <form id="companyForm">
+        <label>Nombre de la empresa<input id="companyName" required placeholder="Ej. Prestamos Lopez"></label>
+        <div class="form-row">
+          <label>Correo del administrador<input id="adminEmail" type="email" required></label>
+          <label>Nombre del administrador<input id="adminUsername" required></label>
+        </div>
+        <label>Clave inicial<input id="adminPass" type="password" minlength="6" required placeholder="Minimo 6 caracteres"></label>
+        <button class="primary-btn full" type="submit">Crear empresa y usuario admin</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Empresas existentes</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Empresa</th><th>Creada</th></tr></thead>
+          <tbody id="companiesTable"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script>
+    const sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+    let session = null;
+    const toast = document.getElementById("toast");
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add("show");
+      setTimeout(() => toast.classList.remove("show"), 3000);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    }
+
+    async function loadCompanies() {
+      const { data, error } = await sb.from("companies").select("*").order("created_at", { ascending: false });
+      if (error) { showToast("No se pudo cargar la lista (¿tu cuenta es 'owner'?)."); return; }
+      document.getElementById("companiesTable").innerHTML = data.length
+        ? data.map(c => `<tr><td>${escapeHtml(c.name)}</td><td>${new Date(c.created_at).toLocaleDateString("es-DO")}</td></tr>`).join("")
+        : `<tr><td colspan="2">Aun no hay empresas.</td></tr>`;
+    }
+
+    async function handleSession(s) {
+      session = s;
+      document.getElementById("loginScreen").style.display = "none";
+      document.getElementById("ownerApp").style.display = "block";
+      await loadCompanies();
+    }
+
+    document.getElementById("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const email = document.getElementById("loginEmail").value.trim();
+      const password = document.getElementById("loginPass").value;
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (error || !data.session) { showToast("Correo o clave incorrectos."); return; }
+      await handleSession(data.session);
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+      await sb.auth.signOut();
+      location.reload();
+    });
+
+    document.getElementById("companyForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const companyName = document.getElementById("companyName").value.trim();
+      const email = document.getElementById("adminEmail").value.trim();
+      const username = document.getElementById("adminUsername").value.trim();
+      const password = document.getElementById("adminPass").value;
+
+      const res = await fetch(`${window.SUPABASE_URL}/functions/v1/manage-user`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ action: "create_company", companyName, email, password, username })
+      });
+      const result = await res.json();
+      if (result.error) { showToast(result.error); return; }
+      e.target.reset();
+      await loadCompanies();
+      showToast(`Empresa creada. Entrega a tu cliente: ${email} / la clave que escribiste.`);
+    });
+
+    sb.auth.getSession().then(({ data }) => { if (data.session) handleSession(data.session); });
+  </script>
+</body>
+</html>

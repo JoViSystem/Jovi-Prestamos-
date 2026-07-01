@@ -1,9 +1,16 @@
-const STORAGE_KEY = "prestamos_pro_v2";
-const OLD_STORAGE_KEY = "prestamos_pro_v1";
-const SESSION_KEY = "prestamos_pro_session";
+const sb = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
 
-const state = loadState();
-let currentUser = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+const state = {
+  settings: { currency: "$", company: "Prestamos Pro", lateFeeType: "none", lateFeeValue: 0 },
+  clients: [],
+  loans: [],
+  payments: [],
+  users: []
+};
+
+let currentUser = null; // { id, email, username, role, companyId }
+let session = null;
+let dataLoaded = false;
 
 const els = {
   loginScreen: document.getElementById("loginScreen"),
@@ -25,8 +32,6 @@ const els = {
   paymentsTable: document.getElementById("paymentsTable"),
   paymentCount: document.getElementById("paymentCount"),
   paymentLoanSelect: document.getElementById("paymentLoanSelect"),
-  paymentDate: document.getElementById("paymentDate"),
-  paymentAmount: document.getElementById("paymentAmount"),
   dueList: document.getElementById("dueList"),
   loanSearch: document.getElementById("loanSearch"),
   clientSearch: document.getElementById("clientSearch"),
@@ -44,61 +49,14 @@ const els = {
   companyInput: document.getElementById("companyInput"),
   lateFeeType: document.getElementById("lateFeeType"),
   lateFeeValue: document.getElementById("lateFeeValue"),
-  usersTable: document.getElementById("usersTable")
+  usersTable: document.getElementById("usersTable"),
+  paymentDate: document.getElementById("paymentDate"),
+  paymentAmount: document.getElementById("paymentAmount"),
+  reportFromInput: document.getElementById("reportFrom")
 };
 
-function defaultState() {
-  return {
-    settings: {
-      currency: "$",
-      company: "Prestamos Pro",
-      lateFeeType: "none",
-      lateFeeValue: 0
-    },
-    users: [
-      { id: "user_admin", username: "admin", passHash: simpleHash("admin123"), role: "admin" },
-      { id: "user_collector", username: "cobrador", passHash: simpleHash("cobro123"), role: "collector" }
-    ],
-    clients: [],
-    loans: [],
-    payments: []
-  };
-}
-
-function loadState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(OLD_STORAGE_KEY));
-    const base = defaultState();
-    if (!saved) return base;
-    return {
-      ...base,
-      ...saved,
-      settings: { ...base.settings, ...(saved.settings || {}) },
-      users: Array.isArray(saved.users) ? saved.users : base.users,
-      clients: Array.isArray(saved.clients) ? saved.clients : [],
-      loans: Array.isArray(saved.loans) ? saved.loans : [],
-      payments: Array.isArray(saved.payments) ? saved.payments : []
-    };
-  } catch {
-    return defaultState();
-  }
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function simpleHash(value) {
-  let hash = 0;
-  const text = `prestamos:${value}`;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-  }
-  return `h${Math.abs(hash)}`;
-}
-
 function isAdmin() {
-  return currentUser?.role === "admin";
+  return currentUser?.role === "admin" || currentUser?.role === "owner";
 }
 
 function uid(prefix) {
@@ -206,14 +164,10 @@ function loanSummary(loan) {
   const overdue = schedule.filter(item => item.status === "overdue").length;
   const status = balance <= 0 ? "closed" : overdue > 0 ? "late" : "active";
   return {
-    total,
-    paid,
-    balance,
-    lateFees,
+    total, paid, balance, lateFees,
     interest: total - Number(loan.principal || 0),
     progress: total + lateFees > 0 ? Math.min((paid / (total + lateFees)) * 100, 100) : 0,
-    overdue,
-    status,
+    overdue, status,
     nextDue: schedule.find(item => item.status !== "paid")
   };
 }
@@ -244,30 +198,126 @@ function applyAuthState() {
   document.querySelectorAll(".admin-only").forEach(item => {
     item.style.display = isAdmin() ? "" : "none";
   });
-  els.sessionLabel.textContent = logged ? `${currentUser.username} - ${currentUser.role === "admin" ? "Admin" : "Cobrador"}` : "Control financiero";
+  els.sessionLabel.textContent = logged ? `${currentUser.username} - ${currentUser.role === "admin" ? "Admin" : currentUser.role === "owner" ? "Dueño" : "Cobrador"}` : "Control financiero";
 }
 
-function login(event) {
+// ------------------------------------------------------------------
+// AUTENTICACION (Supabase Auth)
+// ------------------------------------------------------------------
+
+async function login(event) {
   event.preventDefault();
-  const username = document.getElementById("loginUser").value.trim().toLowerCase();
+  const email = document.getElementById("loginUser").value.trim();
   const password = document.getElementById("loginPass").value;
-  const user = state.users.find(item => item.username.toLowerCase() === username && item.passHash === simpleHash(password));
-  if (!user) {
-    showToast("Usuario o clave incorrectos.");
+  const submitBtn = event.target.querySelector("button[type=submit]");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Entrando...";
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error || !data.session) {
+      showToast("Correo o clave incorrectos.");
+      return;
+    }
+    await handleSession(data.session);
+    event.target.reset();
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Entrar";
+  }
+}
+
+async function logout() {
+  await sb.auth.signOut();
+  currentUser = null;
+  session = null;
+  dataLoaded = false;
+  state.clients = []; state.loans = []; state.payments = []; state.users = [];
+  applyAuthState();
+}
+
+async function handleSession(newSession) {
+  session = newSession;
+  const { data: profile, error } = await sb
+    .from("profiles")
+    .select("id, username, role, company_id")
+    .eq("id", newSession.user.id)
+    .single();
+
+  if (error || !profile) {
+    showToast("Tu cuenta no tiene un perfil asignado. Contacta al administrador.");
+    await sb.auth.signOut();
     return;
   }
-  currentUser = { id: user.id, username: user.username, role: user.role };
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify(currentUser));
-  event.target.reset();
+
+  currentUser = {
+    id: profile.id,
+    email: newSession.user.email,
+    username: profile.username,
+    role: profile.role,
+    companyId: profile.company_id
+  };
+
   applyAuthState();
-  render();
+  await loadEverything();
 }
 
-function logout() {
-  currentUser = null;
-  sessionStorage.removeItem(SESSION_KEY);
-  applyAuthState();
+// ------------------------------------------------------------------
+// CARGA DE DATOS DESDE SUPABASE
+// ------------------------------------------------------------------
+
+function rowToClient(row) {
+  return { id: row.id, name: row.name, document: row.document, phone: row.phone, address: row.address, createdAt: row.created_at };
 }
+
+function rowToLoan(row) {
+  return {
+    id: row.id, clientId: row.client_id, code: row.code, principal: row.principal, rate: row.rate,
+    frequency: row.frequency, terms: row.terms, startDate: row.start_date, interestType: row.interest_type,
+    note: row.note, createdAt: row.created_at
+  };
+}
+
+function rowToPayment(row) {
+  return { id: row.id, loanId: row.loan_id, date: row.date, amount: row.amount, userId: row.created_by, createdAt: row.created_at };
+}
+
+async function loadEverything() {
+  if (!currentUser?.companyId) {
+    showToast("Tu cuenta no esta vinculada a ninguna empresa todavia.");
+    return;
+  }
+  try {
+    const [companyRes, clientsRes, loansRes, paymentsRes, usersRes] = await Promise.all([
+      sb.from("companies").select("*").eq("id", currentUser.companyId).single(),
+      sb.from("clients").select("*").order("created_at", { ascending: false }),
+      sb.from("loans").select("*").order("created_at", { ascending: false }),
+      sb.from("payments").select("*").order("date", { ascending: false }),
+      sb.from("profiles").select("*").eq("company_id", currentUser.companyId)
+    ]);
+
+    if (companyRes.data) {
+      state.settings = {
+        currency: companyRes.data.currency || "$",
+        company: companyRes.data.name || "Prestamos Pro",
+        lateFeeType: companyRes.data.late_fee_type || "none",
+        lateFeeValue: Number(companyRes.data.late_fee_value || 0)
+      };
+    }
+    state.clients = (clientsRes.data || []).map(rowToClient);
+    state.loans = (loansRes.data || []).map(rowToLoan);
+    state.payments = (paymentsRes.data || []).map(rowToPayment);
+    state.users = usersRes.data || [];
+
+    dataLoaded = true;
+    render();
+  } catch (e) {
+    showToast("No se pudieron cargar los datos. Revisa tu conexion.");
+  }
+}
+
+// ------------------------------------------------------------------
+// MODALES Y NAVEGACION
+// ------------------------------------------------------------------
 
 function openModal(id) {
   const modal = document.getElementById(id);
@@ -294,9 +344,12 @@ function fillLoanClientSelect() {
   select.innerHTML = state.clients.map(client => `<option value="${client.id}">${escapeHtml(client.name)}</option>`).join("");
 }
 
+// ------------------------------------------------------------------
+// RENDER
+// ------------------------------------------------------------------
+
 function render() {
-  saveState();
-  if (!currentUser) return;
+  if (!currentUser || !dataLoaded) return;
   renderSettings();
   renderDashboard();
   renderLoans();
@@ -326,7 +379,7 @@ function renderDashboard() {
   els.metricLateFees.textContent = money(summaries.reduce((sum, item) => sum + item.lateFees, 0));
   els.metricOverdue.textContent = summaries.reduce((sum, item) => sum + item.overdue, 0);
 
-  const recent = [...state.loans].slice(-5).reverse();
+  const recent = [...state.loans].slice(0, 5);
   els.recentLoansTable.innerHTML = recent.length ? recent.map(loan => {
     const client = getClient(loan.clientId);
     const summary = loanSummary(loan);
@@ -366,7 +419,7 @@ function renderLoans() {
         <button class="ghost-btn compact-btn" type="button" data-loan-detail="${loan.id}">Detalle</button>
         <button class="ghost-btn compact-btn" type="button" data-loan-edit="${loan.id}">Editar</button>
         <button class="success-btn compact-btn" type="button" data-loan-whatsapp="${loan.id}">WhatsApp</button>
-        <button class="danger-btn compact-btn" type="button" data-loan-delete="${loan.id}">Eliminar</button>
+        ${isAdmin() ? `<button class="danger-btn compact-btn" type="button" data-loan-delete="${loan.id}">Eliminar</button>` : ""}
       </div>
     </article>`;
   }).join("") : `<div class="empty">No hay prestamos que coincidan con el filtro.</div>`;
@@ -460,8 +513,8 @@ function renderReports() {
 
 function renderUsers() {
   els.usersTable.innerHTML = state.users.map(user => `<tr>
-    <td>${escapeHtml(user.username)}</td><td>${user.role === "admin" ? "Administrador" : "Cobrador"}</td>
-    <td>${user.id === "user_admin" ? `<span class="muted">Base</span>` : `<button class="danger-btn compact-btn" type="button" data-user-delete="${user.id}">Eliminar</button>`}</td>
+    <td>${escapeHtml(user.username)}</td><td>${user.role === "admin" ? "Administrador" : user.role === "owner" ? "Dueño" : "Cobrador"}</td>
+    <td>${user.id === currentUser.id ? `<span class="muted">Tu cuenta</span>` : `<button class="danger-btn compact-btn" type="button" data-user-delete="${user.id}">Eliminar</button>`}</td>
   </tr>`).join("");
 }
 
@@ -485,7 +538,11 @@ function resetLoanForm() {
   document.getElementById("loanStartDate").value = today();
 }
 
-function saveClient(event) {
+// ------------------------------------------------------------------
+// ESCRITURA EN SUPABASE (clientes, prestamos, pagos)
+// ------------------------------------------------------------------
+
+async function saveClient(event) {
   event.preventDefault();
   const id = document.getElementById("clientEditId").value;
   const data = {
@@ -494,10 +551,15 @@ function saveClient(event) {
     phone: document.getElementById("clientPhone").value.trim(),
     address: document.getElementById("clientAddress").value.trim()
   };
-  if (id) Object.assign(state.clients.find(client => client.id === id), data);
-  else state.clients.push({ id: uid("client"), ...data, createdAt: new Date().toISOString() });
+  let error;
+  if (id) {
+    ({ error } = await sb.from("clients").update(data).eq("id", id));
+  } else {
+    ({ error } = await sb.from("clients").insert({ ...data, company_id: currentUser.companyId }));
+  }
+  if (error) { showToast("No se pudo guardar el cliente."); return; }
   closeModals();
-  render();
+  await loadEverything();
   showToast("Cliente guardado.");
 }
 
@@ -514,18 +576,19 @@ function editClient(id) {
   document.getElementById("clientAddress").value = client.address || "";
 }
 
-function deleteClient(id) {
+async function deleteClient(id) {
   if (!isAdmin()) return;
   if (state.loans.some(loan => loan.clientId === id)) {
     showToast("No puedes eliminar un cliente con prestamos.");
     return;
   }
   if (!confirm("Eliminar cliente permanentemente?")) return;
-  state.clients = state.clients.filter(client => client.id !== id);
-  render();
+  const { error } = await sb.from("clients").delete().eq("id", id);
+  if (error) { showToast("No se pudo eliminar."); return; }
+  await loadEverything();
 }
 
-function saveLoan(event) {
+async function saveLoan(event) {
   event.preventDefault();
   const clientId = document.getElementById("loanClient").value;
   if (!clientId) {
@@ -534,20 +597,25 @@ function saveLoan(event) {
   }
   const id = document.getElementById("loanEditId").value;
   const data = {
-    clientId,
+    client_id: clientId,
     code: document.getElementById("loanCode").value,
     principal: Number(document.getElementById("loanPrincipal").value),
     rate: Number(document.getElementById("loanRate").value),
     frequency: document.getElementById("loanFrequency").value,
     terms: Number(document.getElementById("loanTerms").value),
-    startDate: document.getElementById("loanStartDate").value,
-    interestType: document.getElementById("loanInterestType").value,
+    start_date: document.getElementById("loanStartDate").value,
+    interest_type: document.getElementById("loanInterestType").value,
     note: document.getElementById("loanNote").value.trim()
   };
-  if (id) Object.assign(state.loans.find(loan => loan.id === id), data);
-  else state.loans.push({ id: uid("loan"), ...data, createdAt: new Date().toISOString() });
+  let error;
+  if (id) {
+    ({ error } = await sb.from("loans").update(data).eq("id", id));
+  } else {
+    ({ error } = await sb.from("loans").insert({ ...data, company_id: currentUser.companyId, created_by: currentUser.id }));
+  }
+  if (error) { showToast("No se pudo guardar el prestamo."); return; }
   closeModals();
-  render();
+  await loadEverything();
   showToast("Prestamo guardado.");
 }
 
@@ -569,14 +637,15 @@ function editLoan(id) {
   document.getElementById("loanNote").value = loan.note || "";
 }
 
-function deleteLoan(id) {
+async function deleteLoan(id) {
+  if (!isAdmin()) { showToast("Solo el administrador puede eliminar prestamos."); return; }
   if (!confirm("Eliminar prestamo y sus pagos?")) return;
-  state.loans = state.loans.filter(loan => loan.id !== id);
-  state.payments = state.payments.filter(payment => payment.loanId !== id);
-  render();
+  const { error } = await sb.from("loans").delete().eq("id", id);
+  if (error) { showToast("No se pudo eliminar."); return; }
+  await loadEverything();
 }
 
-function registerPayment() {
+async function registerPayment() {
   const loanId = els.paymentLoanSelect.value;
   const amount = Number(els.paymentAmount.value);
   const loan = state.loans.find(item => item.id === loanId);
@@ -585,18 +654,26 @@ function registerPayment() {
     return;
   }
   const summary = loanSummary(loan);
-  const payment = { id: uid("payment"), loanId, date: els.paymentDate.value || today(), amount: Math.min(amount, summary.balance), userId: currentUser.id, createdAt: new Date().toISOString() };
-  state.payments.push(payment);
+  const paymentData = {
+    loan_id: loanId,
+    company_id: currentUser.companyId,
+    date: els.paymentDate.value || today(),
+    amount: Math.min(amount, summary.balance),
+    created_by: currentUser.id
+  };
+  const { data, error } = await sb.from("payments").insert(paymentData).select().single();
+  if (error) { showToast("No se pudo registrar el pago."); return; }
   els.paymentAmount.value = "";
-  render();
+  await loadEverything();
   showToast("Pago registrado.");
-  showReceipt(payment.id);
+  showReceipt(data.id);
 }
 
-function deletePayment(id) {
+async function deletePayment(id) {
   if (!isAdmin() || !confirm("Eliminar este pago?")) return;
-  state.payments = state.payments.filter(payment => payment.id !== id);
-  render();
+  const { error } = await sb.from("payments").delete().eq("id", id);
+  if (error) { showToast("No se pudo eliminar."); return; }
+  await loadEverything();
 }
 
 function showLoanDetail(id) {
@@ -667,21 +744,51 @@ function exportBackup() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `respaldo-prestamos-${today()}.json`;
+  a.download = `respaldo-${state.settings.company || "prestamos"}-${today()}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
-function importBackup(file) {
+// Importa un respaldo viejo (formato localStorage) hacia Supabase, re-creando IDs.
+async function importBackup(file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const imported = JSON.parse(reader.result);
       if (!Array.isArray(imported.clients) || !Array.isArray(imported.loans) || !Array.isArray(imported.payments)) throw new Error("Formato invalido");
-      Object.assign(state, { ...defaultState(), ...imported, settings: { ...defaultState().settings, ...(imported.settings || {}) } });
-      render();
+
+      showToast("Importando datos, no cierres esta pestaña...");
+      const clientIdMap = {};
+      for (const client of imported.clients) {
+        const { data, error } = await sb.from("clients").insert({
+          company_id: currentUser.companyId, name: client.name, document: client.document, phone: client.phone, address: client.address
+        }).select().single();
+        if (!error) clientIdMap[client.id] = data.id;
+      }
+
+      const loanIdMap = {};
+      for (const loan of imported.loans) {
+        const newClientId = clientIdMap[loan.clientId];
+        if (!newClientId) continue;
+        const { data, error } = await sb.from("loans").insert({
+          company_id: currentUser.companyId, client_id: newClientId, code: loan.code, principal: loan.principal,
+          rate: loan.rate, frequency: loan.frequency, terms: loan.terms, start_date: loan.startDate,
+          interest_type: loan.interestType, note: loan.note, created_by: currentUser.id
+        }).select().single();
+        if (!error) loanIdMap[loan.id] = data.id;
+      }
+
+      for (const payment of imported.payments) {
+        const newLoanId = loanIdMap[payment.loanId];
+        if (!newLoanId) continue;
+        await sb.from("payments").insert({
+          company_id: currentUser.companyId, loan_id: newLoanId, date: payment.date, amount: payment.amount, created_by: currentUser.id
+        });
+      }
+
+      await loadEverything();
       showToast("Respaldo importado.");
     } catch {
       showToast("No se pudo importar el archivo.");
@@ -690,35 +797,53 @@ function importBackup(file) {
   reader.readAsText(file);
 }
 
-function saveSettings() {
+async function saveSettings() {
   if (!isAdmin()) return;
-  state.settings.currency = els.currencyInput.value.trim() || "$";
-  state.settings.company = els.companyInput.value.trim() || "Prestamos Pro";
-  state.settings.lateFeeType = els.lateFeeType.value;
-  state.settings.lateFeeValue = Number(els.lateFeeValue.value || 0);
-  render();
+  const data = {
+    currency: els.currencyInput.value.trim() || "$",
+    name: els.companyInput.value.trim() || "Prestamos Pro",
+    late_fee_type: els.lateFeeType.value,
+    late_fee_value: Number(els.lateFeeValue.value || 0)
+  };
+  const { error } = await sb.from("companies").update(data).eq("id", currentUser.companyId);
+  if (error) { showToast("No se pudo guardar la configuracion."); return; }
+  await loadEverything();
   showToast("Configuracion guardada.");
 }
 
-function createUser(event) {
+async function callManageUser(payload) {
+  const res = await fetch(`${window.SUPABASE_URL}/functions/v1/manage-user`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify(payload)
+  });
+  return res.json();
+}
+
+async function createUser(event) {
   event.preventDefault();
   if (!isAdmin()) return;
   const username = document.getElementById("newUserName").value.trim();
+  const email = document.getElementById("newUserEmail").value.trim();
   const pass = document.getElementById("newUserPass").value;
-  if (state.users.some(user => user.username.toLowerCase() === username.toLowerCase())) {
-    showToast("Ese usuario ya existe.");
+  const role = document.getElementById("newUserRole").value;
+  if (!email || pass.length < 6) {
+    showToast("Escribe un correo valido y una clave de al menos 6 caracteres.");
     return;
   }
-  state.users.push({ id: uid("user"), username, passHash: simpleHash(pass), role: document.getElementById("newUserRole").value });
+  const result = await callManageUser({ action: "create_user", email, password: pass, username, role });
+  if (result.error) { showToast(result.error); return; }
   event.target.reset();
-  render();
+  await loadEverything();
   showToast("Usuario creado.");
 }
 
-function deleteUser(id) {
-  if (!isAdmin() || id === "user_admin") return;
-  state.users = state.users.filter(user => user.id !== id);
-  render();
+async function deleteUser(id) {
+  if (!isAdmin()) return;
+  if (!confirm("Eliminar este usuario?")) return;
+  const result = await callManageUser({ action: "delete_user", userId: id });
+  if (result.error) { showToast(result.error); return; }
+  await loadEverything();
 }
 
 function printReport() {
@@ -774,7 +899,11 @@ els.paymentDate.value = today();
 els.reportFrom.value = monthStart();
 els.reportTo.value = today();
 applyAuthState();
-render();
+
+// Restaurar sesion si ya habia una activa (recargar pagina, volver despues)
+sb.auth.getSession().then(({ data }) => {
+  if (data.session) handleSession(data.session);
+});
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   navigator.serviceWorker.register("sw.js").catch(() => {});

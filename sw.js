@@ -1,9 +1,10 @@
-const CACHE_NAME = "prestamos-pro-v2";
+const CACHE_NAME = "prestamos-pro-v3";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./config.js",
   "./manifest.json",
   "./icon.svg"
 ];

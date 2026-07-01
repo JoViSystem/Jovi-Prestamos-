@@ -19,7 +19,7 @@
         </div>
       </div>
       <form id="loginForm">
-        <label>Usuario<input id="loginUser" autocomplete="username" required></label>
+        <label>Correo electronico<input id="loginUser" type="email" autocomplete="username" required></label>
         <label>Clave<input id="loginPass" type="password" autocomplete="current-password" required></label>
         <button class="primary-btn full" type="submit">Entrar</button>
       </form>
@@ -215,7 +215,8 @@
               <label>Usuario<input id="newUserName" required></label>
               <label>Rol<select id="newUserRole"><option value="collector">Cobrador</option><option value="admin">Administrador</option></select></label>
             </div>
-            <label>Clave<input id="newUserPass" type="password" required></label>
+            <label>Correo electronico<input id="newUserEmail" type="email" required></label>
+            <label>Clave<input id="newUserPass" type="password" minlength="6" required></label>
             <button class="primary-btn full" type="submit">Crear usuario</button>
           </form>
         </section>
@@ -273,6 +274,8 @@
   </div>
 
   <div class="toast" id="toast" role="status"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
